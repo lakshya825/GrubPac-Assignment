@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: taskflow_docker
+    ports:
+      - "5433:5432" # Mapped to 5433 to avoid conflict with your local Postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379" # Mapped to 6380 to avoid conflict with your local Redis
+    volumes:
+      - redis_data:/data
+
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password123@postgres:5432/taskflow_docker
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - ACCESS_TOKEN_SECRET=supersecretaccess
+      - REFRESH_TOKEN_SECRET=supersecretrefresh
+      - PORT=3000
+    depends_on:
+      - postgres
+      - redis
+    # Wait for DB to be ready, push schema, seed, and start server
+    command: sh -c "npx prisma db push --accept-data-loss && npx tsx prisma/seed.ts && npx tsx src/server.ts"
+
+  worker:
+    build: .
+    environment:
+      - DATABASE_URL=postgresql://postgres:password123@postgres:5432/taskflow_docker
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - api # Wait for API to seed DB
+    command: npx tsx src/worker.ts
+
+volumes:
+  postgres_data:
+  redis_data:

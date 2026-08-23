@@ -1,0 +1,149 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearchPostgres"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  org_admin
+  member
+}
+
+enum TaskStatus {
+  todo
+  in_progress
+  review
+  done
+}
+
+enum TaskPriority {
+  low
+  medium
+  high
+  urgent
+}
+
+model Organization {
+  id        String      @id @default(uuid())
+  name      String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  members   OrgMember[]
+  projects  Project[]
+}
+
+model User {
+  id        String      @id @default(uuid())
+  email     String      @unique
+  password  String
+  name      String
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  memberships  OrgMember[]
+  assignments  TaskAssignment[]
+  comments     Comment[]
+  refreshTokens RefreshToken[]
+}
+
+model OrgMember {
+  id             String       @id @default(uuid())
+  userId         String
+  organizationId String
+  role           Role         @default(member)
+  joinedAt       DateTime     @default(now())
+// DECISION: We use onDelete: Cascade here so that if a user is deleted, all their memberships are automatically cleaned up.
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+// DECISION: We use onDelete: Cascade so that if an organization is deleted, all member links are destroyed.
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, organizationId])
+}
+
+model Project {
+  id             String       @id
+  name           String
+  description    String?
+  organizationId String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime? // Used for soft-deletes
+
+// DECISION: We use onDelete: Cascade here because a project cannot exist without its parent organization.
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tasks          Task[]
+
+  // INDEX JUSTIFICATION: We frequently fetch projects by their organization (e.g. `WHERE organizationId = X`). This index speeds up those lookups significantly in a multi-tenant system.
+  @@index([organizationId]) 
+}
+
+model Task {
+  id          String         @id @default(uuid())
+  title       String
+  description String?
+  status      TaskStatus     @default(todo)
+  priority    TaskPriority   @default(medium)
+  projectId   String
+  dueDate     DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  deletedAt   DateTime? // Used for soft-deletes
+
+// DECISION: We use onDelete: Cascade because tasks are strictly bound to projects. If a project is deleted, its tasks should be wiped.
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  assignments TaskAssignment[]
+  comments    Comment[]
+
+  // INDEX JUSTIFICATION: 
+  // 1. projectId: Tasks are almost always queried within the context of a project (e.g. GET /projects/:id/tasks).
+  // 2. status & priority: We added specific API filters for status and priority, so these indexes optimize those exact WHERE clauses.
+  @@index([projectId])
+  @@index([status])
+  @@index([priority])
+}
+
+model TaskAssignment {
+  id        String   @id @default(uuid())
+  taskId    String
+  userId    String
+  assignedAt DateTime @default(now())
+  
+// DECISION: We use onDelete: Cascade for both relations. If a task or user is deleted, the assignment mapping becomes invalid and should be destroyed to prevent orphaned data.
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  content   String
+  taskId    String
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+// DECISION: We use onDelete: Cascade. If a task is deleted, its comments must go. If a user is deleted, we cascade to remove their comments (alternatively, this could be RESTRICT if we wanted to retain history, but for this spec, CASCADE ensures clean tenant isolation).
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  
+// DECISION: We use onDelete: Cascade so that deleting a user revokes all their active sessions.
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
